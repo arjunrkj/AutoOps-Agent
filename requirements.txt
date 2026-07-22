@@ -1,0 +1,7 @@
+google-adk
+google-genai
+lyzr
+qdrant-client
+pydantic
+python-dotenv
+colorama
