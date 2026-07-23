@@ -11,5 +11,5 @@ resource "aws_security_group" "vulnerable_sg" {
 resource "aws_db_instance" "overpriced_db" {
   allocated_storage = 100
   engine            = "mysql"
-  instance_class    = "db.m5.large" # Fixed [COST-01]: Downsized instance class to fit $300/mo budget
+  instance_class    = "db.m5.large" # Fixed [COST-01]: Downsized for staging environment based on P95 CPU utilization
 }

@@ -19,9 +19,9 @@ from colorama import init, Fore, Style
 # Initialize Colorama
 init(autoreset=True)
 
-from app.vector_db import query_compliance_rules
 from app.agents import run_security_agent, run_cost_agent, run_healer_agent
 from app.validator import validate_hcl_syntax
+from app.vector_db import query_compliance_rules, query_rules_from_ast, parse_tf_ast
 
 def main():
     print("\n" + Fore.MAGENTA + Style.BRIGHT + "=" * 64)
@@ -42,17 +42,41 @@ def main():
     print(Fore.YELLOW + raw_tf.strip())
     print(Fore.YELLOW + "-" * 50 + "\n")
 
-    # Step 2: Query Qdrant vector DB
-    print(Fore.WHITE + Style.BRIGHT + "🔍 [2/6] Querying Qdrant Vector DB for Compliance Knowledge:")
-    retrieved_rules = query_compliance_rules("AWS security group SSH 22 cost database m5 budget")
+    # Environment Context & Telemetry Payload
+    env_context = {
+        "environment": "staging",
+        "telemetry": {
+            "p95_cpu_utilization": "8.4%",
+            "peak_memory_gb": "4.2 GB",
+            "active_connections": 14,
+            "traffic_tier": "low-throughput-nonprod"
+        }
+    }
+
+    # Step 2: HCL AST Parsing & Query Qdrant vector DB dynamically
+    print(Fore.WHITE + Style.BRIGHT + "🧩 [2/6] Parsing HCL AST & Dynamically Querying Qdrant Vector DB:")
+    retrieved_rules, ast_data = query_rules_from_ast(raw_tf)
+    
     print(Fore.CYAN + "-" * 50)
+    print(Fore.CYAN + "  • Extracted AST Resources : " + ", ".join(f"[{res['type']}: {res['name']}]" for res in ast_data['resources']))
+    print(Fore.CYAN + "  • Dynamic Security Query  : " + ast_data['sec_query'])
+    print(Fore.CYAN + "  • Dynamic Cost Query      : " + ast_data['cost_query'])
+    print(Fore.CYAN + "-" * 50)
+    print(Fore.CYAN + "Retrieved Qdrant Rules:")
     print(Fore.CYAN + retrieved_rules)
     print(Fore.CYAN + "-" * 50 + "\n")
 
+    print(Fore.WHITE + Style.BRIGHT + "📊 Environment & Workload Telemetry Context:")
+    print(Fore.BLUE + "-" * 50)
+    print(Fore.BLUE + f"  • Target Environment : {env_context['environment']}")
+    for k, v in env_context['telemetry'].items():
+        print(Fore.BLUE + f"  • Metric - {k} : {v}")
+    print(Fore.BLUE + "-" * 50 + "\n")
+
     # Step 3: Run Security & Cost Agents
-    print(Fore.WHITE + Style.BRIGHT + "🛡️  [3/6] Invoking SecurityAgent & CostAgent Audit:")
-    sec_violations = run_security_agent(raw_tf)
-    cost_violations = run_cost_agent(raw_tf)
+    print(Fore.WHITE + Style.BRIGHT + "🛡️  [3/6] Invoking SecurityAgent & CostAgent Audit (with Environment Context):")
+    sec_violations = run_security_agent(raw_tf, env_context)
+    cost_violations = run_cost_agent(raw_tf, env_context)
 
     all_flaws = sec_violations + cost_violations
 
@@ -63,9 +87,9 @@ def main():
     print(Fore.RED + "-" * 50 + "\n")
 
     # Step 4: Invoke PlatformHealerAgent
-    print(Fore.WHITE + Style.BRIGHT + "⚡ [4/6] Invoking PlatformHealerAgent (Gemini 2.5 Flash Auto-Healing)...")
+    print(Fore.WHITE + Style.BRIGHT + "⚡ [4/6] Invoking PlatformHealerAgent (Gemini 2.5 Flash Auto-Healing with Telemetry Context)...")
     flaws_text = "\n".join(all_flaws)
-    healed_hcl = run_healer_agent(raw_tf, flaws_text)
+    healed_hcl = run_healer_agent(raw_tf, flaws_text, env_context)
 
     # Step 5: Validate Syntax & Display Healed HCL
     print(Fore.WHITE + Style.BRIGHT + "✅ [5/6] Validating Healed HCL Syntax & Saving File:")

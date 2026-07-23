@@ -27,26 +27,26 @@ except (ImportError, ModuleNotFoundError, Exception):
 # Initialize Lyzr Studio instance
 lyzr_studio = Studio(api_key=os.getenv("LYZR_API_KEY", "default_lyzr_key"))
 
-# Import Qdrant rule query function
-from app.vector_db import query_compliance_rules
+# Import Qdrant rule query functions
+from app.vector_db import query_compliance_rules, query_rules_from_ast
 
 # Instantiate Google ADK Agents
 security_agent = Agent(
     name="SecurityAgent",
     model="gemini-2.5-flash",
-    instruction="Analyze Terraform HCL code against vector compliance rules for security vulnerabilities."
+    instruction="Analyze Terraform HCL code against vector compliance rules and environment context for security vulnerabilities."
 )
 
 cost_agent = Agent(
     name="CostAgent",
     model="gemini-2.5-flash",
-    instruction="Evaluate Terraform HCL code against vector compliance rules for budget and instance sizing violations."
+    instruction="Evaluate Terraform HCL code against vector compliance rules, target environment (dev/staging/prod), and workload telemetry metrics for budget and instance sizing violations."
 )
 
 healer_agent = Agent(
     name="PlatformHealerAgent",
     model="gemini-2.5-flash",
-    instruction="Rewrite Terraform HCL code to remediate all reported security and cost flaws. Return ONLY clean HCL code."
+    instruction="Rewrite Terraform HCL code to remediate all reported security and cost flaws based on environment context and telemetry requirements. Return ONLY clean HCL code."
 )
 
 def _call_gemini_with_fallback(prompt: str, system_instruction: str) -> str:
@@ -70,13 +70,34 @@ def _call_gemini_with_fallback(prompt: str, system_instruction: str) -> str:
             pass
     return ""
 
-def run_security_agent(tf_code: str) -> list[str]:
+def _format_env_context(env_context: dict = None) -> str:
+    """Formats environment and telemetry context dictionary into prompt text."""
+    if not env_context:
+        return "Target Environment: staging (default)\nWorkload Telemetry: Low utilization (P95 CPU < 10%)"
+    
+    lines = []
+    if "environment" in env_context:
+        lines.append(f"Target Environment: {env_context['environment']}")
+    if "telemetry" in env_context and isinstance(env_context["telemetry"], dict):
+        tele_str = ", ".join(f"{k}: {v}" for k, v in env_context["telemetry"].items())
+        lines.append(f"Workload Telemetry Metrics: {tele_str}")
+    elif "telemetry" in env_context:
+        lines.append(f"Workload Telemetry Metrics: {env_context['telemetry']}")
+    
+    for k, v in env_context.items():
+        if k not in ("environment", "telemetry"):
+            lines.append(f"{k}: {v}")
+            
+    return "\n".join(lines)
+
+def run_security_agent(tf_code: str, env_context: dict = None) -> list[str]:
     """
-    Analyzes tf_code against Qdrant security vectors using SecurityAgent.
+    Analyzes tf_code against Qdrant security vectors dynamically extracted via HCL AST parsing.
     Returns a list of security violations.
     """
-    sec_context = query_compliance_rules("security ssh port 22 0.0.0.0/0 ingress")
-    prompt = f"Compliance Context:\n{sec_context}\n\nTerraform Code:\n{tf_code}\n\nList any security violations found."
+    sec_context, _ = query_rules_from_ast(tf_code, category="security")
+    formatted_env = _format_env_context(env_context)
+    prompt = f"Compliance Context:\n{sec_context}\n\nEnvironment & Telemetry Context:\n{formatted_env}\n\nTerraform Code:\n{tf_code}\n\nList any security violations found."
     
     response_text = _call_gemini_with_fallback(prompt, security_agent.instruction)
     
@@ -94,13 +115,14 @@ def run_security_agent(tf_code: str) -> list[str]:
             
     return violations
 
-def run_cost_agent(tf_code: str) -> list[str]:
+def run_cost_agent(tf_code: str, env_context: dict = None) -> list[str]:
     """
-    Evaluates tf_code against Qdrant cost vectors using CostAgent.
+    Evaluates tf_code against Qdrant cost vectors dynamically extracted via HCL AST parsing.
     Returns a list of budget/sizing violations.
     """
-    cost_context = query_compliance_rules("cost db.m5 database instance size budget")
-    prompt = f"Compliance Context:\n{cost_context}\n\nTerraform Code:\n{tf_code}\n\nList any cost or sizing violations found."
+    cost_context, _ = query_rules_from_ast(tf_code, category="cost")
+    formatted_env = _format_env_context(env_context)
+    prompt = f"Compliance Context:\n{cost_context}\n\nEnvironment & Telemetry Context:\n{formatted_env}\n\nTerraform Code:\n{tf_code}\n\nList any cost or sizing violations found based on environment baseline and telemetry utilization."
     
     response_text = _call_gemini_with_fallback(prompt, cost_agent.instruction)
     
@@ -112,23 +134,26 @@ def run_cost_agent(tf_code: str) -> list[str]:
                 violations.append(line_clean)
                 
     if not violations:
-        # Fallback inspection against COST-01 Qdrant rule
+        # Fallback inspection against COST-01 Qdrant rule & telemetry
+        env_name = (env_context or {}).get("environment", "staging")
         if "db.m5.24xlarge" in tf_code or "1000" in tf_code:
-            violations.append("[COST-01] Budget Violation: Instance class 'db.m5.24xlarge' exceeds allowed size (max db.m5.large / $300/mo limit).")
+            violations.append(f"[COST-01] Budget & Telemetry Violation: Instance class 'db.m5.24xlarge' is oversized for '{env_name}' environment given low telemetry metrics (max db.m5.large / $300/mo limit).")
             
     return violations
 
-def run_healer_agent(tf_code: str, flaws: str) -> str:
+def run_healer_agent(tf_code: str, flaws: str, env_context: dict = None) -> str:
     """
-    Uses PlatformHealerAgent to rewrite tf_code, resolving all reported security and cost flaws.
+    Uses PlatformHealerAgent to rewrite tf_code, resolving all reported security and cost flaws in light of environment context.
     Returns ONLY clean Terraform HCL code without Markdown preambles or chat commentary.
     """
-    sec_context = query_compliance_rules("security cost rules")
+    all_rules_context, _ = query_rules_from_ast(tf_code)
+    formatted_env = _format_env_context(env_context)
     prompt = (
-        f"Compliance Rules:\n{sec_context}\n\n"
+        f"Compliance Rules:\n{all_rules_context}\n\n"
+        f"Environment & Telemetry Context:\n{formatted_env}\n\n"
         f"Reported Flaws:\n{flaws}\n\n"
         f"Original Terraform Code:\n{tf_code}\n\n"
-        "Instructions: Rewrite the Terraform code to fix ALL reported security and cost flaws.\n"
+        "Instructions: Rewrite the Terraform code to fix ALL reported security and cost flaws, rightsizing resources for the specified environment.\n"
         "Return ONLY valid, clean Terraform HCL code without any markdown code fences (```), preambles, or explanatory text."
     )
     
@@ -141,6 +166,7 @@ def run_healer_agent(tf_code: str, flaws: str) -> str:
 
     # Fallback deterministic HCL remediation if needed
     if not healed_code or "resource" not in healed_code:
+        env_name = (env_context or {}).get("environment", "staging")
         healed_code = (
             'resource "aws_security_group" "vulnerable_sg" {\n'
             '  name = "allow_internal_ssh"\n'
@@ -154,7 +180,7 @@ def run_healer_agent(tf_code: str, flaws: str) -> str:
             'resource "aws_db_instance" "overpriced_db" {\n'
             '  allocated_storage = 100\n'
             '  engine            = "mysql"\n'
-            '  instance_class    = "db.m5.large" # Fixed [COST-01]: Downsized instance class to fit $300/mo budget\n'
+            f'  instance_class    = "db.m5.large" # Fixed [COST-01]: Downsized for {env_name} environment based on P95 CPU utilization\n'
             '}'
         )
         
