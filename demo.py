@@ -22,6 +22,7 @@ init(autoreset=True)
 from app.agents import run_security_agent, run_cost_agent, run_healer_agent
 from app.validator import validate_hcl_syntax
 from app.vector_db import query_compliance_rules, query_rules_from_ast, parse_tf_ast
+from app.github_pr import create_github_pr
 
 def main():
     print("\n" + Fore.MAGENTA + Style.BRIGHT + "=" * 64)
@@ -112,26 +113,17 @@ def main():
 
     print(Fore.WHITE + Style.BRIGHT + f"💾 Healed plan saved to: {healed_plan_path}\n")
 
-    # Step 6: GitHub PR JSON Payload
-    print(Fore.WHITE + Style.BRIGHT + "🚀 [6/6] Generating GitHub PR Payload (Ready to Merge):")
-    pr_payload = {
-        "event": "pull_request",
-        "action": "opened",
-        "pull_request": {
-            "title": "[AutoOps-Agent] Auto-Healed AWS Infrastructure Plan (SEC-01 & COST-01)",
-            "branch": "autoops/remediate-bad-plan",
-            "target": "main",
-            "author": "AutoOps-Agent Bot",
-            "compliance_status": "PASSED",
-            "qdrant_vector_verification": "SUCCESS",
-            "syntax_validated": is_valid,
-            "modified_files": ["sample_tf/healed_plan.tf"],
-            "summary": "Remediated open SSH port 22 to internal VPC CIDR and downsized database instance class to db.m5.large within budget constraints.",
-            "mergeable_state": "clean"
-        }
-    }
-
-    print(Fore.LIGHTBLUE_EX + json.dumps(pr_payload, indent=2))
+    # Step 6: Live GitHub PR Creation
+    print(Fore.WHITE + Style.BRIGHT + "🚀 [6/6] Executing Live GitHub Pull Request Integration:")
+    pr_result = create_github_pr(healed_hcl, all_flaws, env_context)
+    
+    if pr_result.get("status") in ("SUCCESS", "EXISTS"):
+        print(Fore.LIGHTGREEN_EX + f"  • Status : {pr_result['status']}")
+        print(Fore.LIGHTGREEN_EX + f"  • Branch : {pr_result.get('branch')}")
+        print(Fore.LIGHTGREEN_EX + f"  • PR URL : {pr_result.get('pr_url')}")
+    else:
+        print(Fore.YELLOW + f"  • Status  : {pr_result.get('status')}")
+        print(Fore.YELLOW + f"  • Message : {pr_result.get('message')}")
     print("\n" + Fore.MAGENTA + Style.BRIGHT + "=" * 64)
     print(Fore.MAGENTA + Style.BRIGHT + "================ AUTO OPS AGENT: PIPELINE COMPLETE ================")
     print(Fore.MAGENTA + Style.BRIGHT + "=" * 64 + "\n")
