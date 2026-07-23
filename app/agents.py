@@ -55,8 +55,7 @@ def _call_gemini_with_fallback(prompt: str, system_instruction: str) -> str:
     if api_key:
         try:
             client = genai.Client(api_key=api_key)
-            # Try gemini-2.5-flash, fallback to gemini-2.0-flash or gemini-1.5-flash if needed
-            for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]:
                 try:
                     response = client.models.generate_content(
                         model=model_name,
@@ -161,6 +160,7 @@ def run_healer_agent(tf_code: str, flaws: str, env_context: dict = None) -> str:
     
     # Clean up markdown code blocks if returned
     if healed_code:
+
         healed_code = re.sub(r"^```(?:hcl|terraform)?", "", healed_code, flags=re.MULTILINE)
         healed_code = re.sub(r"```$", "", healed_code, flags=re.MULTILINE).strip()
 
