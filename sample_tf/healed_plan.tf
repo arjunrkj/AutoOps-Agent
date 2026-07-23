@@ -1,3 +1,4 @@
+# Flawed Infrastructure Plan Baseline
 resource "aws_security_group" "vulnerable_sg" {
   name = "allow_all_ssh"
   ingress {
